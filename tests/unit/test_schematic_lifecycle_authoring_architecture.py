@@ -55,6 +55,29 @@ def test_lifecycle_register_stays_below_300_lines() -> None:
     assert boundaries.REGISTER_LINE_LIMITS["kicad_mcp.tools.schematic_lifecycle_authoring"] == 300
 
 
+def test_lifecycle_tools_are_registered_exactly_once() -> None:
+    adapter = boundaries.SRC_ROOT / "kicad_mcp" / "tools" / "schematic_lifecycle_authoring.py"
+    tree = ast.parse(adapter.read_text(encoding="utf-8"), filename=str(adapter))
+    register_function = next(
+        node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "register"
+    )
+    nested_tools = {
+        node.name: node for node in register_function.body if isinstance(node, ast.FunctionDef)
+    }
+
+    for name in ("sch_add_jumper", "sch_annotate", "sch_reload"):
+        decorators = nested_tools[name].decorator_list
+        mcp_tool_count = sum(
+            isinstance(decorator, ast.Call)
+            and isinstance(decorator.func, ast.Attribute)
+            and isinstance(decorator.func.value, ast.Name)
+            and decorator.func.value.id == "mcp"
+            and decorator.func.attr == "tool"
+            for decorator in decorators
+        )
+        assert mcp_tool_count == 1, f"{name} must be registered exactly once"
+
+
 def test_schematic_composition_root_delegates_lifecycle_tools_and_keeps_fixer_seam() -> None:
     root = boundaries.SRC_ROOT / "kicad_mcp" / "tools" / "schematic.py"
     source = root.read_text(encoding="utf-8")

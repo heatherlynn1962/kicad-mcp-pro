@@ -46,6 +46,7 @@ from mcp.server.auth.provider import AccessToken
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
+from mcp.server.fastmcp.server import Settings as FastMCPSettings
 from mcp.server.lowlevel.helper_types import ReadResourceContents
 from mcp.types import (
     CancelTaskRequest,
@@ -1901,6 +1902,10 @@ def build_server(profile: str | None = None, *, defer_registration: bool = False
             required_scopes=["mcp"],
         )
 
+    # mcp 1.29 can leave FastMCP's Settings model with an unresolved lifespan
+    # forward reference. Rebuilding before instantiation resolves the field and
+    # prevents Pydantic settings sources from warning on every server startup.
+    FastMCPSettings.model_rebuild()
     server = KiCadFastMCP(
         name="kicad-mcp-pro",
         instructions=(

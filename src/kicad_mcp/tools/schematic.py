@@ -486,6 +486,31 @@ def _load_kicad_schematic(sch_file: Path) -> _LoadedSchematicLike:
     return cast(_LoadedSchematicLike, load_schematic(str(sch_file)))
 
 
+_SCHEMATIC_LOAD_RETRY_DELAYS_S = (0.05, 0.15)
+
+
+def _load_kicad_schematic_with_retry(sch_file: Path) -> _LoadedSchematicLike:
+    """Retry bounded read-only loads that overlap a KiCad save.
+
+    KiCad replaces schematic files while saving them. A reader can therefore
+    briefly observe a file that exists but is not yet parseable. Schematic
+    inspection is idempotent, so two short retries are safe; write paths still
+    use the single-attempt loader and retain their existing transactional guards.
+    """
+    last_error: Exception | None = None
+    for attempt in range(len(_SCHEMATIC_LOAD_RETRY_DELAYS_S) + 1):
+        try:
+            return _load_kicad_schematic(sch_file)
+        except Exception as exc:
+            last_error = exc
+            if attempt == len(_SCHEMATIC_LOAD_RETRY_DELAYS_S):
+                break
+            time.sleep(_SCHEMATIC_LOAD_RETRY_DELAYS_S[attempt])
+    if last_error is None:  # pragma: no cover - every failed attempt records its exception
+        raise RuntimeError("Schematic loader retry loop ended without an error.")
+    raise last_error
+
+
 def _load_hierarchy_schematic(sch_file: Path) -> RootSchematic:
     return cast(RootSchematic, _load_kicad_schematic(sch_file))
 
@@ -541,7 +566,7 @@ class _KicadSchApiBackend:
 
     def parse_schematic_file(self, sch_file: Path) -> dict[str, Any]:
         try:
-            schematic = _load_kicad_schematic(sch_file)
+            schematic = _load_kicad_schematic_with_retry(sch_file)
         except Exception as exc:
             raise RuntimeError(
                 f"Could not load schematic '{sch_file}' through kicad-sch-api."

@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import sys
 import threading
+import warnings
 from pathlib import Path
 
 import pytest
+from mcp.server.fastmcp.server import Settings as FastMCPSettings
 
 from kicad_mcp.config import get_config
 from kicad_mcp.connection import KiCadConnectionError
@@ -52,6 +54,18 @@ def test_all_registered_tools_have_capability_records() -> None:
     # Regression guard: every routed tool must carry a capability record so it is
     # never silently hidden from tools/list via the WRITE-tier fallback.
     assert _tools_without_capability_record() == []
+
+
+def test_build_server_completes_fastmcp_settings_model(sample_project: Path) -> None:
+    _ = sample_project
+    FastMCPSettings.__pydantic_complete__ = False
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        server = build_server("minimal", defer_registration=True)
+
+    assert isinstance(server, KiCadFastMCP)
+    assert FastMCPSettings.__pydantic_complete__ is True
 
 
 def test_capability_audit_detects_missing_record(monkeypatch) -> None:

@@ -48,6 +48,35 @@ def test_parse_schematic_file_surfaces_root_uuid(tmp_path: Path) -> None:
     assert parse_schematic_file(sch_file)["uuid"] == "aa111111-2222-3333-4444-555555555555"
 
 
+def test_parse_schematic_file_retries_one_transient_loader_failure(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    sch_file = tmp_path / "demo.kicad_sch"
+    sch_file.write_text(_REALISTIC_SCH_HEADER, encoding="utf-8")
+    from kicad_mcp.tools import schematic as schematic_tools
+
+    real_loader = schematic_tools._load_kicad_schematic
+    calls = 0
+    sleeps: list[float] = []
+
+    def flaky_loader(path: Path):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise ValueError("file was observed during a KiCad save")
+        return real_loader(path)
+
+    monkeypatch.setattr(schematic_tools, "_load_kicad_schematic", flaky_loader)
+    monkeypatch.setattr(schematic_tools.time, "sleep", sleeps.append)
+
+    parsed = parse_schematic_file(sch_file)
+
+    assert parsed["uuid"] == "aa111111-2222-3333-4444-555555555555"
+    assert calls == 2
+    assert sleeps == [0.05]
+
+
 def test_schematic_capability_matrix_matches_reference_fixture() -> None:
     fixture_path = (
         Path(__file__).resolve().parents[1]
