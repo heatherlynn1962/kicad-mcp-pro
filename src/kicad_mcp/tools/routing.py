@@ -30,6 +30,7 @@ from ..pcb.board_access import (
     board_vias,
     board_zones,
 )
+from ..pcb.board_initialization import AI_DIRECTIVES_FILENAME, file_fingerprint
 from ..pcb.geometry import point_xy_mm, track_segment_length_mm
 from ..pcb.pad_mapping import MappedPad, map_pads_to_footprints, pad_id
 from ..pcb.route_planning import (
@@ -70,6 +71,7 @@ _TUNING_ASSIGNMENTS_FILENAME = "tuning_profile_assignments.json"
 class _LiveRoutePlan:
     plan_id: str
     board_fingerprint: str
+    directive_fingerprint: str
     source_ref: str
     source_pad: str
     target_ref: str
@@ -104,6 +106,13 @@ def _board_fingerprint(board: object) -> str:
         raise ValueError("The active KiCad board cannot provide a live-state fingerprint.")
     payload = str(get_as_string()).encode("utf-8", errors="replace")
     return hashlib.sha256(payload).hexdigest()
+
+
+def _directive_fingerprint() -> str:
+    project_dir = get_config().project_dir
+    if project_dir is None:
+        return "missing"
+    return file_fingerprint(project_dir / AI_DIRECTIVES_FILENAME)
 
 
 def _mapped_board_pads(board: object) -> list[MappedPad]:
@@ -327,6 +336,7 @@ def _route_obstacles(
 def _plan_payload(plan: _LiveRoutePlan) -> dict[str, object]:
     return {
         "plan_id": plan.plan_id,
+        "directive_fingerprint": plan.directive_fingerprint,
         "source": f"{plan.source_ref}.{plan.source_pad}",
         "target": f"{plan.target_ref}.{plan.target_pad}",
         "net": plan.net_name,
@@ -401,9 +411,16 @@ def _build_live_route_plan(
         bounds=bounds,
         max_iterations=max_iterations,
     )
+    directive_fingerprint = _directive_fingerprint()
+    if directive_fingerprint == "missing":
+        warnings.append(
+            "AI.md is not initialized; project-specific scope and routing boundaries "
+            "could not be reviewed."
+        )
     plan = _LiveRoutePlan(
         plan_id=str(uuid.uuid4()),
         board_fingerprint=_board_fingerprint(board),
+        directive_fingerprint=directive_fingerprint,
         source_ref=_pad_reference(board, source),
         source_pad=str(source_like.number),
         target_ref=_pad_reference(board, target),
@@ -730,6 +747,12 @@ def register(mcp: FastMCP) -> None:
                     "pcb_apply_route_plan",
                     "The live board changed after this route was planned. "
                     "Plan it again before applying.",
+                )
+            if _directive_fingerprint() != plan.directive_fingerprint:
+                return ToolResult.failure(
+                    "pcb_apply_route_plan",
+                    "AI.md changed after this route was planned. Review the directives and "
+                    "plan the route again before applying.",
                 )
             source = _find_pad_on_board(board, plan.source_ref, plan.source_pad)
             target = _find_pad_on_board(board, plan.target_ref, plan.target_pad)

@@ -361,6 +361,7 @@ def _is_read_tool(name: str, category: str) -> bool:
         "pcb_transfer_quality_gate",
         "pcb_transfer_quality_report",
         "pcb_plan_route",
+        "pcb_plan_board_initialization",
         "lib_certify_footprint",
         "lib_verify_component_contract",
         "project_quality_gate",
@@ -512,8 +513,15 @@ def _register_router_tools() -> None:
                     runtime=runtime,
                     writes_files=writes_files,
                     writes_kicad_gui_state=writes_gui,
-                    supports_dry_run=False,
+                    supports_dry_run=name
+                    in {"pcb_capture_board_profile", "pcb_plan_board_initialization"},
                     supports_rollback=category == "version_control"
+                    or name
+                    in {
+                        "pcb_apply_board_initialization",
+                        "pcb_capture_board_profile",
+                        "pcb_revert_board_initialization",
+                    }
                     or name.startswith(("pcb_begin_", "pcb_push_", "pcb_drop_", "pcb_revert")),
                     human_gate_required=tier is AccessTier.HUMAN_ONLY,
                     requires_human_confirmation=tier is AccessTier.HUMAN_ONLY,

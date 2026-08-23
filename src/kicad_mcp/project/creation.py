@@ -10,6 +10,17 @@ from pathlib import Path
 from typing import Literal, Protocol
 
 from ..file_formats import GENERATED_SEXPR_DIALECT_VERSION
+from ..pcb.board_initialization import (
+    AI_DIRECTIVES_FILENAME,
+    AI_NOTES_FILENAME,
+    PROFILE_RELATIVE_PATH,
+    atomic_write_text,
+    capture_profile,
+    dump_profile,
+    load_project_payload,
+    render_ai_directives,
+    render_ai_notes,
+)
 
 
 class ProjectCreationConfigProtocol(Protocol):
@@ -95,6 +106,21 @@ class ProjectCreationService:
             (pcb_file, "pcb", self.upgrade_file(pcb_file, "pcb", project_dir)),
             (sch_file, "sch", self.upgrade_file(sch_file, "sch", project_dir)),
         ]
+        initialized_files: list[Path] = []
+        ai_path = project_dir / AI_DIRECTIVES_FILENAME
+        if not ai_path.exists():
+            atomic_write_text(ai_path, render_ai_directives(name))
+            initialized_files.append(ai_path)
+        notes_path = project_dir / AI_NOTES_FILENAME
+        if not notes_path.exists():
+            atomic_write_text(notes_path, render_ai_notes())
+            initialized_files.append(notes_path)
+        profile_path = project_dir / PROFILE_RELATIVE_PATH
+        if not profile_path.exists():
+            profile = capture_profile(load_project_payload(project_file), board_file=pcb_file)
+            atomic_write_text(profile_path, dump_profile(profile))
+            initialized_files.append(profile_path)
+
         cfg.apply_project(
             project_dir,
             project_file=project_file,
@@ -110,6 +136,7 @@ class ProjectCreationService:
             f"- PCB file: {pcb_file}",
             f"- Schematic file: {sch_file}",
         ]
+        lines.extend(f"- Initialized project context: {path}" for path in initialized_files)
         for generated_file, kind, result in format_upgrades:
             if not result.upgraded:
                 lines.append(

@@ -9,9 +9,9 @@ KiCad MCP Pro defaults to a bounded tool surface so general-purpose agents do no
 | `default` | `readonly` | 24 | Safe general-agent review and next-action discovery |
 | `review` | `readonly` | 24 | Explicit read-only DRC, ERC, DFM, visual QA, and component-contract review |
 | `build` | `write` | 24 | Plan/apply/verify workflows plus bounded PCB inspect/remove/DRC operations |
-| `heather_live` | `write` | 30 | Live PCB inspection, placement, zones, and plan/apply/revert single-connection routing |
+| `heather_live` | `write` | 35 | Project initialization, live PCB inspection, placement, zones, and bounded routing |
 | `release` | `manufacturing` | 24 | Validation and human-gated manufacturing package generation |
-| `expert` | `experimental` | 377 | Complete catalog for trusted advanced clients |
+| `expert` | `experimental` | 395 | Complete catalog for trusted advanced clients |
 
 `full` and `agent_full` remain available for backward compatibility. They expose the complete catalog and should not be the default for a general agent.
 
@@ -44,6 +44,16 @@ waypoints. `pcb_apply_route_plan` refuses stale plans and applies all track segm
 KiCad undo step. `pcb_revert_route_plan` removes only the UUIDs recorded by that application.
 The first routing implementation is deliberately single-layer and does not claim KiCad-native
 push-and-shove or authoritative DRC; run `run_drc` or `get_unconnected_nets` after application.
+
+Board initialization is project-agnostic and profile-backed. `pcb_capture_board_profile` previews
+or captures the active project's manufacturing floors, routing presets, via presets, net classes,
+net-pattern assignments, and stackup expectations in `.kicad-mcp/board-profile.yaml`.
+`pcb_plan_board_initialization` compares that profile with the current `.kicad_pro` file;
+`pcb_apply_board_initialization` performs a stale-state-checked, idempotent merge; and
+`pcb_revert_board_initialization` restores exactly the files named in its receipt. The workflow
+creates `AI.md` and `AI_NOTES.md` only when they are absent and never overwrites owner-authored
+directives. `project_get_ai_context` exposes the directives to agents. Route plans bind the
+`AI.md` fingerprint and refuse application if project boundaries changed after planning.
 
 Manufacturing handoff requires both the release profile and manufacturing mode:
 

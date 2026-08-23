@@ -95,3 +95,6 @@ def test_create_reports_unavailable_format_migration(tmp_path: Path) -> None:
     assert "cli unavailable" in output
     assert applied == [tmp_path / "fresh"]
     assert resets == [True]
+    assert (tmp_path / "fresh" / "AI.md").is_file()
+    assert (tmp_path / "fresh" / "AI_NOTES.md").is_file()
+    assert (tmp_path / "fresh" / ".kicad-mcp" / "board-profile.yaml").is_file()

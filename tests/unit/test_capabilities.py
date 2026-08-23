@@ -56,6 +56,20 @@ def test_manufacturing_package_requires_human_gate() -> None:
     assert record.supports_dry_run is True
 
 
+def test_board_initialization_capabilities_describe_preview_and_rollback() -> None:
+    plan = get("pcb_plan_board_initialization")
+    apply_record = get("pcb_apply_board_initialization")
+    capture = get("pcb_capture_board_profile")
+
+    assert plan is not None and plan.tier == AccessTier.READ
+    assert plan.supports_dry_run is True
+    assert apply_record is not None and apply_record.tier == AccessTier.WRITE
+    assert apply_record.supports_rollback is True
+    assert capture is not None and capture.tier == AccessTier.WRITE
+    assert capture.supports_dry_run is True
+    assert capture.supports_rollback is True
+
+
 def test_registered_tools_have_valid_verification_levels() -> None:
     valid_levels = {"verified", "experimental", "planned"}
 

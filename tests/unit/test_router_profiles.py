@@ -60,6 +60,13 @@ def test_available_profiles_include_v2_surface() -> None:
         "pcb_apply_route_plan",
         "pcb_revert_route_plan",
     }.issubset(set(tools_for_profile("heather_live")))
+    assert {
+        "project_get_ai_context",
+        "pcb_capture_board_profile",
+        "pcb_plan_board_initialization",
+        "pcb_apply_board_initialization",
+        "pcb_revert_board_initialization",
+    }.issubset(set(tools_for_profile("heather_live")))
     assert "export_manufacturing_package" not in tools_for_profile("heather_live")
     assert categories_for_profile("unknown-profile") == PROFILE_CATEGORIES["default"]
 

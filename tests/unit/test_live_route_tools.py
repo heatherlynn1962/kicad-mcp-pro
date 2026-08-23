@@ -179,6 +179,28 @@ async def test_stale_plan_is_rejected_before_any_mutation(
 
 
 @pytest.mark.anyio
+async def test_changed_ai_directives_reject_route_before_mutation(
+    live_route_server: tuple[FastMCP, _FakeBoard],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server, board = live_route_server
+    monkeypatch.setattr(routing, "_directive_fingerprint", lambda: "directive-before")
+    plan = await call_tool_payload(
+        server,
+        "pcb_plan_route",
+        {"ref1": "J10", "pad1": "1", "ref2": "U11", "pad2": "7"},
+    )
+    plan_id = plan["extra"]["route_plan"]["plan_id"]
+    monkeypatch.setattr(routing, "_directive_fingerprint", lambda: "directive-after")
+
+    applied = await call_tool_payload(server, "pcb_apply_route_plan", {"plan_id": plan_id})
+
+    assert applied["ok"] is False
+    assert "AI.md changed" in applied["errors"][0]
+    assert board.effects == []
+
+
+@pytest.mark.anyio
 async def test_two_selected_pads_can_define_the_route(
     live_route_server: tuple[FastMCP, _FakeBoard],
 ) -> None:

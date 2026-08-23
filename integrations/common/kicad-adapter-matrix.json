@@ -370,7 +370,7 @@
           "toolCount": 8
         },
         "project": {
-          "availableCount": 31,
+          "availableCount": 36,
           "blockedCount": 0,
           "canarySurfaces": [
             "read"
@@ -383,10 +383,10 @@
             "kicad-cli"
           ],
           "selectedBackends": {
-            "local-engine": 15,
-            "local-filesystem": 16
+            "local-engine": 17,
+            "local-filesystem": 19
           },
-          "toolCount": 31
+          "toolCount": 36
         },
         "release_export": {
           "availableCount": 0,
@@ -694,7 +694,7 @@
           "toolCount": 8
         },
         "project": {
-          "availableCount": 31,
+          "availableCount": 36,
           "blockedCount": 0,
           "canarySurfaces": [
             "read"
@@ -707,10 +707,10 @@
             "kicad-cli"
           ],
           "selectedBackends": {
-            "local-engine": 15,
-            "local-filesystem": 16
+            "local-engine": 17,
+            "local-filesystem": 19
           },
-          "toolCount": 31
+          "toolCount": 36
         },
         "release_export": {
           "availableCount": 2,
@@ -1019,7 +1019,7 @@
           "toolCount": 8
         },
         "project": {
-          "availableCount": 31,
+          "availableCount": 36,
           "blockedCount": 0,
           "canarySurfaces": [
             "read"
@@ -1032,10 +1032,10 @@
             "kicad-cli"
           ],
           "selectedBackends": {
-            "local-engine": 15,
-            "local-filesystem": 16
+            "local-engine": 17,
+            "local-filesystem": 19
           },
-          "toolCount": 31
+          "toolCount": 36
         },
         "release_export": {
           "availableCount": 2,
@@ -1198,7 +1198,7 @@
     "previewBaseline": "11.x",
     "publicSupportClaim": "KiCad 11 remains preview until native canaries pass.",
     "stableBaseline": "10.0.x",
-    "toolCount": 390
+    "toolCount": 395
   },
   "tools": [
     {
@@ -4562,6 +4562,30 @@
       "writesFiles": true
     },
     {
+      "category": "project",
+      "routes": {
+        "degradedNoKiCad": {
+          "available": true,
+          "backend": "local-filesystem",
+          "mutationGuard": "atomic-write-validation"
+        },
+        "kicad10Gui": {
+          "available": true,
+          "backend": "local-filesystem",
+          "mutationGuard": "atomic-write-validation"
+        },
+        "kicad11Headless": {
+          "available": true,
+          "backend": "local-filesystem",
+          "mutationGuard": "atomic-write-validation"
+        }
+      },
+      "runtime": "none",
+      "tier": "write",
+      "tool": "pcb_apply_board_initialization",
+      "writesFiles": true
+    },
+    {
       "category": "routing",
       "routes": {
         "degradedNoKiCad": {
@@ -4751,6 +4775,30 @@
       "runtime": "kicad_ipc",
       "tier": "write",
       "tool": "pcb_block_place",
+      "writesFiles": true
+    },
+    {
+      "category": "project",
+      "routes": {
+        "degradedNoKiCad": {
+          "available": true,
+          "backend": "local-filesystem",
+          "mutationGuard": "atomic-write-validation"
+        },
+        "kicad10Gui": {
+          "available": true,
+          "backend": "local-filesystem",
+          "mutationGuard": "atomic-write-validation"
+        },
+        "kicad11Headless": {
+          "available": true,
+          "backend": "local-filesystem",
+          "mutationGuard": "atomic-write-validation"
+        }
+      },
+      "runtime": "none",
+      "tier": "write",
+      "tool": "pcb_capture_board_profile",
       "writesFiles": true
     },
     {
@@ -5714,6 +5762,30 @@
       "writesFiles": false
     },
     {
+      "category": "project",
+      "routes": {
+        "degradedNoKiCad": {
+          "available": true,
+          "backend": "local-engine",
+          "mutationGuard": null
+        },
+        "kicad10Gui": {
+          "available": true,
+          "backend": "local-engine",
+          "mutationGuard": null
+        },
+        "kicad11Headless": {
+          "available": true,
+          "backend": "local-engine",
+          "mutationGuard": null
+        }
+      },
+      "runtime": "none",
+      "tier": "read",
+      "tool": "pcb_plan_board_initialization",
+      "writesFiles": false
+    },
+    {
       "category": "routing",
       "routes": {
         "degradedNoKiCad": {
@@ -5831,6 +5903,30 @@
       "runtime": "kicad_ipc",
       "tier": "write",
       "tool": "pcb_revert",
+      "writesFiles": true
+    },
+    {
+      "category": "project",
+      "routes": {
+        "degradedNoKiCad": {
+          "available": true,
+          "backend": "local-filesystem",
+          "mutationGuard": "atomic-write-validation"
+        },
+        "kicad10Gui": {
+          "available": true,
+          "backend": "local-filesystem",
+          "mutationGuard": "atomic-write-validation"
+        },
+        "kicad11Headless": {
+          "available": true,
+          "backend": "local-filesystem",
+          "mutationGuard": "atomic-write-validation"
+        }
+      },
+      "runtime": "none",
+      "tier": "write",
+      "tool": "pcb_revert_board_initialization",
       "writesFiles": true
     },
     {
@@ -6576,6 +6672,30 @@
       "tier": "write",
       "tool": "project_generate_design_prompt",
       "writesFiles": true
+    },
+    {
+      "category": "project",
+      "routes": {
+        "degradedNoKiCad": {
+          "available": true,
+          "backend": "local-engine",
+          "mutationGuard": null
+        },
+        "kicad10Gui": {
+          "available": true,
+          "backend": "local-engine",
+          "mutationGuard": null
+        },
+        "kicad11Headless": {
+          "available": true,
+          "backend": "local-engine",
+          "mutationGuard": null
+        }
+      },
+      "runtime": "none",
+      "tier": "read",
+      "tool": "project_get_ai_context",
+      "writesFiles": false
     },
     {
       "category": "project",

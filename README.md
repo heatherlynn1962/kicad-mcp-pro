@@ -50,7 +50,7 @@
 
 KiCad MCP Pro is a Model Context Protocol server for KiCad EDA workflows. It exposes tools, resources, and prompts for schematic, PCB, validation, DFM, and manufacturing export automation.
 
-The server now starts with the bounded `default` profile: 24 read-only review tools instead of the complete expert catalog. Use `build` with write mode for controlled edits, `heather_live` for plan-first live PCB placement and single-connection routing, `release` with manufacturing mode for human-gated handoff, or `expert`/`full` only for advanced trusted clients. See [`docs/agents/progressive-disclosure.md`](docs/agents/progressive-disclosure.md).
+The server now starts with a bounded `default` profile instead of the complete expert catalog. Use `build` with write mode for controlled edits, `heather_live` for project-profile initialization plus plan-first live PCB placement and single-connection routing, `release` with manufacturing mode for human-gated handoff, or `expert`/`full` only for advanced trusted clients. See [`docs/agents/progressive-disclosure.md`](docs/agents/progressive-disclosure.md).
 
 Telemetry and error reporting are disabled by default. Opt-in OpenTelemetry
 configuration is documented in

@@ -131,7 +131,8 @@ def get_tool_metadata(tool_name: str) -> ToolMetadata | None:
 # excluded, so they are classified non-idempotent.
 _IDEMPOTENT_WRITE_TOKENS = ("set_", "save", "refill", "export", "upgrade", "reset_")
 _IDEMPOTENT_TOOL_NAMES = {"sch_spread_sheets", "sch_wire_sheet_pins"}
-_READ_ONLY_TOOL_NAMES = {"pcb_plan_route"}
+_READ_ONLY_TOOL_NAMES = {"pcb_plan_board_initialization", "pcb_plan_route"}
+_WRITE_TOOL_NAMES = {"pcb_capture_board_profile"}
 
 
 def _is_read_only_name(normalized: str) -> bool:
@@ -171,7 +172,8 @@ def infer_tool_annotations(
     is_read_only = _is_read_only_name(normalized)
 
     is_write = (
-        normalized.startswith(_WRITE_PREFIXES)
+        normalized in _WRITE_TOOL_NAMES
+        or normalized.startswith(_WRITE_PREFIXES)
         or any(
             token in normalized
             for token in (
