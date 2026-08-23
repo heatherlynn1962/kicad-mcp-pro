@@ -9,6 +9,7 @@ KiCad MCP Pro defaults to a bounded tool surface so general-purpose agents do no
 | `default` | `readonly` | 24 | Safe general-agent review and next-action discovery |
 | `review` | `readonly` | 24 | Explicit read-only DRC, ERC, DFM, visual QA, and component-contract review |
 | `build` | `write` | 24 | Plan/apply/verify workflows plus bounded PCB inspect/remove/DRC operations |
+| `heather_live` | `write` | 30 | Live PCB inspection, placement, zones, and plan/apply/revert single-connection routing |
 | `release` | `manufacturing` | 24 | Validation and human-gated manufacturing package generation |
 | `expert` | `experimental` | 377 | Complete catalog for trusted advanced clients |
 
@@ -30,6 +31,20 @@ KICAD_MCP_PROFILE=build
 KICAD_MCP_OPERATING_MODE=write
 ```
 
+Live PCB collaboration uses the dedicated bounded profile:
+
+```text
+KICAD_MCP_PROFILE=heather_live
+KICAD_MCP_OPERATING_MODE=write
+```
+
+`pcb_plan_route` and `pcb_get_routing_context` are read-only previews. A plan records
+the live board fingerprint, selected endpoints, net-class rules, obstacles, and 45-degree
+waypoints. `pcb_apply_route_plan` refuses stale plans and applies all track segments as one
+KiCad undo step. `pcb_revert_route_plan` removes only the UUIDs recorded by that application.
+The first routing implementation is deliberately single-layer and does not claim KiCad-native
+push-and-shove or authoritative DRC; run `run_drc` or `get_unconnected_nets` after application.
+
 Manufacturing handoff requires both the release profile and manufacturing mode:
 
 ```text
@@ -45,6 +60,11 @@ The review profile contains only `READ`-tier capabilities. The eight `review-pro
 Category discovery is profile-aware: hidden categories and lower-level tool names are not returned by the discovery tools until the server starts with a profile that allows them.
 
 The build profile exposes workflow-level operations instead of the unrestricted low-level mutation catalog. Schematic work is bounded by `plan`, `preview`, `apply`, `verify`, and `rollback`. For PCB correction, it adds only the focused `pcb_get_tracks`, `pcb_get_vias`, `pcb_delete_items`, `pcb_delete_object`, and `run_drc` path alongside begin, push, drop, and revert transaction controls. Broad placement, routing, copper, and direct-file mutation helpers remain outside this bounded profile. This is intentional: an agent that needs a different MCP capability must request a supported broader profile rather than falling back to ad-hoc `.kicad_pcb` or `.kicad_sch` text rewriting.
+
+The `heather_live` profile is a separate local-only collaboration surface. It omits manufacturing
+exports, FreeRouting, bulk autorouting, schematic writes, and release publication. Explicit
+`route` requests may apply a previously validated plan; requests phrased as `show`, `preview`, or
+`how would you route` stop after planning.
 
 The release profile exposes validation, board statistics, checkpoint inspection, and `export_manufacturing_package`. The final manufacturing package remains `HUMAN_ONLY` and requires explicit human confirmation.
 

@@ -360,6 +360,7 @@ def _is_read_tool(name: str, category: str) -> bool:
         "pcb_placement_quality_report",
         "pcb_transfer_quality_gate",
         "pcb_transfer_quality_report",
+        "pcb_plan_route",
         "lib_certify_footprint",
         "lib_verify_component_contract",
         "project_quality_gate",
@@ -428,6 +429,13 @@ def _tier_for_tool(name: str, category: str) -> AccessTier:
 def _runtime_for_tool(name: str, category: str, tier: AccessTier) -> RuntimeRequirement:
     if name in {"sch_render_png", "sch_render_visual_diff", "sch_set_title_block_info"}:
         return RuntimeRequirement.NONE
+    if name in {
+        "pcb_get_routing_context",
+        "pcb_plan_route",
+        "pcb_apply_route_plan",
+        "pcb_revert_route_plan",
+    }:
+        return RuntimeRequirement.KICAD_IPC
     if category == "simulation" or name.startswith("sim_"):
         return RuntimeRequirement.NGSPICE
     if "freerouting" in name:
@@ -447,6 +455,8 @@ def _runtime_for_tool(name: str, category: str, tier: AccessTier) -> RuntimeRequ
     if category == "schematic":
         return RuntimeRequirement.KICAD_IPC if name == "sch_reload" else RuntimeRequirement.NONE
     if category in {"pcb_read", "pcb_write"} and tier is not AccessTier.READ:
+        return RuntimeRequirement.KICAD_IPC
+    if category == "routing" and name in {"route_single_track", "route_from_pad_to_pad"}:
         return RuntimeRequirement.KICAD_IPC
     return RuntimeRequirement.NONE
 

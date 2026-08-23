@@ -101,6 +101,7 @@ class KiCadMCPConfig(BaseSettings):
         "review",
         "build",
         "release",
+        "heather_live",
         "expert",
         "full",
         "minimal",

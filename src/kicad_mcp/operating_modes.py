@@ -47,6 +47,14 @@ _WRITE_TOOL_NAMES = frozenset(
         "sch_live_preview",
     }
 )
+_SAFE_LIVE_ROUTING_TOOL_NAMES = frozenset(
+    {
+        "pcb_get_routing_context",
+        "pcb_plan_route",
+        "pcb_apply_route_plan",
+        "pcb_revert_route_plan",
+    }
+)
 _WRITE_PREFIXES = (
     "pcb_add",
     "pcb_align",
@@ -233,6 +241,8 @@ def _category_names_for_tool(tool_name: str) -> set[str]:
 
 
 def _is_experimental_tool(tool_name: str) -> bool:
+    if tool_name in _SAFE_LIVE_ROUTING_TOOL_NAMES:
+        return False
     categories = _category_names_for_tool(tool_name)
     return (
         tool_name in EXPERIMENTAL_TOOL_NAMES

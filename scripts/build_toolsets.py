@@ -53,6 +53,15 @@ TOOLSETS: dict[str, tuple[str, str, str, bool]] = {
         ),
         False,
     ),
+    "heather_live": (
+        "heather_live",
+        "write",
+        (
+            "Bounded live PCB collaboration with selection-aware placement, zones, "
+            "and plan/apply/revert single-connection routing."
+        ),
+        False,
+    ),
     "release": (
         "release",
         "manufacturing",

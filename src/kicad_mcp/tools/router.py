@@ -517,6 +517,10 @@ TOOL_CATEGORIES: dict[str, ToolCategory] = {
             "Advanced routing helpers including FreeRouting orchestration and rule-file tuning."
         ),
         "tools": [
+            "pcb_get_routing_context",
+            "pcb_plan_route",
+            "pcb_apply_route_plan",
+            "pcb_revert_route_plan",
             "route_single_track",
             "route_from_pad_to_pad",
             "route_export_dsn",
@@ -701,11 +705,45 @@ _RELEASE_TOOLS: tuple[str, ...] = (
     "vcs_diff_with_checkpoint",
 )
 
+_HEATHER_LIVE_TOOLS: tuple[str, ...] = (
+    "kicad_set_project",
+    "kicad_get_project_info",
+    "kicad_get_server_info",
+    "kicad_list_tool_categories",
+    "kicad_get_tools_in_category",
+    "project_get_design_spec",
+    "project_set_design_intent",
+    "project_assess_edit_impact",
+    "pcb_get_board_summary",
+    "pcb_get_tracks",
+    "pcb_get_vias",
+    "pcb_get_pads",
+    "pcb_get_selection",
+    "pcb_get_design_rules",
+    "pcb_get_stackup",
+    "pcb_get_routing_context",
+    "pcb_plan_route",
+    "pcb_apply_route_plan",
+    "pcb_revert_route_plan",
+    "pcb_move_component",
+    "pcb_place_component",
+    "pcb_delete_object",
+    "pcb_add_zone",
+    "pcb_set_design_rules",
+    "pcb_begin_commit",
+    "pcb_push_commit",
+    "pcb_drop_commit",
+    "pcb_visual_qa",
+    "get_unconnected_nets",
+    "run_drc",
+)
+
 PROFILE_TOOL_ALLOWLISTS: dict[str, tuple[str, ...]] = {
     "default": _REVIEW_TOOLS,
     "review": _REVIEW_TOOLS,
     "build": _BUILD_TOOLS,
     "release": _RELEASE_TOOLS,
+    "heather_live": _HEATHER_LIVE_TOOLS,
 }
 
 
@@ -725,6 +763,7 @@ PROFILE_CATEGORIES: dict[str, tuple[str, ...]] = {
     "review": _categories_for_tools(_REVIEW_TOOLS),
     "build": _categories_for_tools(_BUILD_TOOLS),
     "release": _categories_for_tools(_RELEASE_TOOLS),
+    "heather_live": _categories_for_tools(_HEATHER_LIVE_TOOLS),
     "minimal": ("project", "pcb_read", "export"),
     "beginner": ("project", "pcb_read", "dfm"),
     "read_only_inspection": ("project", "pcb_read", "dfm"),
@@ -859,6 +898,7 @@ def available_profiles() -> tuple[str, ...]:
         "review",
         "build",
         "release",
+        "heather_live",
         "expert",
         "full",
         "minimal",

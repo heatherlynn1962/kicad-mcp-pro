@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
+import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
 from kipy.board_types import Net, Track
 from kipy.geometry import Vector2
+from kipy.proto.board.board_types_pb2 import BoardLayer, ZoneType
 from mcp.server.fastmcp import Context, FastMCP
 
 from ..config import get_config
@@ -17,16 +21,36 @@ from ..errors import ManualStepRequiredError
 from ..models.common import _PadLike
 from ..models.pcb import AddTrackInput
 from ..models.tool_result import ArtifactRef, StateDelta, ToolResult
-from ..pcb.board_access import board_nets_filtered, board_pads, board_tracks
+from ..pcb.board_access import (
+    board_footprints,
+    board_nets_filtered,
+    board_pads,
+    board_shapes,
+    board_tracks,
+    board_vias,
+    board_zones,
+)
 from ..pcb.geometry import point_xy_mm, track_segment_length_mm
+from ..pcb.pad_mapping import MappedPad, map_pads_to_footprints, pad_id
+from ..pcb.route_planning import (
+    CircleObstacle,
+    PlannedRoute,
+    RectObstacle,
+    RouteBounds,
+    RouteNotFoundError,
+    RouteObstacle,
+    RoutePoint,
+    SegmentObstacle,
+    plan_route,
+)
 from ..utils.freerouting import FreeRoutingRunner
 from ..utils.layers import resolve_layer
 from ..utils.router_core import apply_ses_to_pcb
 from ..utils.sexpr import _sexpr_string
-from ..utils.units import mm_to_nm
+from ..utils.units import mm_to_nm, nm_to_mm
 from .export_support import _get_pcb_file
 from .metadata import headless_compatible, requires_dependency, requires_kicad_running
-from .pcb import _transactional_board_write
+from .pcb import _run_queued_ipc_mutation, _transactional_board_write
 from .project import load_design_intent as _load_design_intent
 from .routing_rules import _load_rules_content, _mm, _rules_file_path, _upsert_rule, _write_rule
 
@@ -42,13 +66,361 @@ _TUNING_PROFILES_FILENAME = "tuning_profiles.json"
 _TUNING_ASSIGNMENTS_FILENAME = "tuning_profile_assignments.json"
 
 
-def _find_pad(reference: str, pad_number: str) -> _PadLike | None:
-    for pad in cast(list[_PadLike], board_pads(get_board())):
-        if pad.parent.reference_field.text.value == reference and str(pad.number) == str(
+@dataclass(frozen=True, slots=True)
+class _LiveRoutePlan:
+    plan_id: str
+    board_fingerprint: str
+    source_ref: str
+    source_pad: str
+    target_ref: str
+    target_pad: str
+    net_name: str
+    layer_name: str
+    width_mm: float
+    clearance_mm: float
+    grid_mm: float
+    obstacle_count: int
+    route: PlannedRoute
+
+
+@dataclass(frozen=True, slots=True)
+class _RouteReceipt:
+    plan: _LiveRoutePlan
+    created_item_ids: tuple[str, ...]
+    post_fingerprint: str
+
+
+_ROUTE_PLANS: dict[str, _LiveRoutePlan] = {}
+_ROUTE_RECEIPTS: dict[str, _RouteReceipt] = {}
+
+
+def _item_id(item: object) -> str:
+    return str(getattr(getattr(item, "id", None), "value", "") or "")
+
+
+def _board_fingerprint(board: object) -> str:
+    get_as_string = getattr(board, "get_as_string", None)
+    if not callable(get_as_string):
+        raise ValueError("The active KiCad board cannot provide a live-state fingerprint.")
+    payload = str(get_as_string()).encode("utf-8", errors="replace")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _mapped_board_pads(board: object) -> list[MappedPad]:
+    return map_pads_to_footprints(board_pads(board), board_footprints(board))
+
+
+def _pad_reference(board: object, pad: object) -> str:
+    identifier = pad_id(pad)
+    for mapped_pad in _mapped_board_pads(board):
+        if mapped_pad.pad is pad or (identifier is not None and mapped_pad.pad_id == identifier):
+            if mapped_pad.reference is None:
+                break
+            return mapped_pad.reference
+    raise ValueError(
+        f"KiCad did not expose a footprint reference for pad {getattr(pad, 'number', '?')}."
+    )
+
+
+def _find_pad_on_board(board: object, reference: str, pad_number: str) -> object | None:
+    for mapped_pad in _mapped_board_pads(board):
+        if mapped_pad.reference == reference and str(getattr(mapped_pad.pad, "number", "")) == str(
             pad_number
         ):
-            return pad
+            return mapped_pad.pad
     return None
+
+
+def _resolve_route_pads(
+    board: object,
+    *,
+    ref1: str,
+    pad1: str,
+    ref2: str,
+    pad2: str,
+) -> tuple[object, object]:
+    supplied = tuple(bool(value) for value in (ref1, pad1, ref2, pad2))
+    if any(supplied) and not all(supplied):
+        raise ValueError("Supply both references and both pad numbers, or select exactly two pads.")
+    if all(supplied):
+        source = _find_pad_on_board(board, ref1, pad1)
+        target = _find_pad_on_board(board, ref2, pad2)
+        if source is None or target is None:
+            missing = []
+            if source is None:
+                missing.append(f"{ref1}.{pad1}")
+            if target is None:
+                missing.append(f"{ref2}.{pad2}")
+            raise ValueError(f"Route endpoint pad(s) not found: {', '.join(missing)}.")
+        return source, target
+
+    get_selection = getattr(board, "get_selection", None)
+    selected = list(get_selection()) if callable(get_selection) else []
+    selected_ids = {identifier for item in selected if (identifier := pad_id(item)) is not None}
+    selected_pads = [
+        mapped_pad.pad
+        for mapped_pad in _mapped_board_pads(board)
+        if mapped_pad.pad in selected
+        or (mapped_pad.pad_id is not None and mapped_pad.pad_id in selected_ids)
+    ]
+    if len(selected_pads) != 2:
+        raise ValueError("Select exactly two PCB pads, or provide ref1/pad1/ref2/pad2 explicitly.")
+    return selected_pads[0], selected_pads[1]
+
+
+def _route_rules(
+    board: object,
+    net: object,
+    *,
+    width_mm: float,
+    clearance_mm: float,
+) -> tuple[float, float, str]:
+    net_name = str(getattr(net, "name", "") or "")
+    if not net_name:
+        raise ValueError("The selected pads do not belong to a named net.")
+    net_class = None
+    get_netclass = getattr(board, "get_netclass_for_nets", None)
+    if callable(get_netclass):
+        classes = get_netclass(net)
+        if isinstance(classes, dict):
+            net_class = classes.get(net_name) or next(iter(classes.values()), None)
+    resolved_width = width_mm
+    resolved_clearance = clearance_mm
+    if resolved_width <= 0 and net_class is not None:
+        resolved_width = nm_to_mm(int(getattr(net_class, "track_width", 0) or 0))
+    if resolved_clearance <= 0 and net_class is not None:
+        resolved_clearance = nm_to_mm(int(getattr(net_class, "clearance", 0) or 0))
+    if resolved_width <= 0:
+        resolved_width = 0.25
+    if resolved_clearance <= 0:
+        resolved_clearance = 0.20
+    return resolved_width, resolved_clearance, net_name
+
+
+def _pad_radius_mm(pad: object, layer: int) -> float:
+    layers = list(getattr(getattr(pad, "padstack", None), "copper_layers", []) or [])
+    sizes: list[float] = []
+    for pad_layer in layers:
+        pad_layer_id = int(getattr(pad_layer, "layer", BoardLayer.BL_UNDEFINED))
+        if pad_layer_id not in {layer, BoardLayer.BL_UNDEFINED}:
+            continue
+        size = getattr(pad_layer, "size", None)
+        if size is None:
+            continue
+        width_mm, height_mm = point_xy_mm(size)
+        sizes.extend([abs(width_mm), abs(height_mm)])
+    return max(sizes, default=1.0) / 2.0
+
+
+def _route_obstacles(
+    board: object,
+    *,
+    layer: int,
+    net_name: str,
+    width_mm: float,
+    clearance_mm: float,
+    start: RoutePoint,
+    end: RoutePoint,
+) -> tuple[tuple[RouteObstacle, ...], RouteBounds | None, list[str]]:
+    inflate = clearance_mm + width_mm / 2.0
+    obstacles: list[RouteObstacle] = []
+    warnings: list[str] = []
+
+    for track in board_tracks(board):
+        track_like = cast(Any, track)
+        if int(getattr(track, "layer", BoardLayer.BL_UNDEFINED)) != layer:
+            continue
+        if str(getattr(getattr(track, "net", None), "name", "") or "") == net_name:
+            continue
+        track_width_mm = nm_to_mm(int(getattr(track, "width", 0) or 0))
+        obstacles.append(
+            SegmentObstacle(
+                RoutePoint(*point_xy_mm(track_like.start)),
+                RoutePoint(*point_xy_mm(track_like.end)),
+                track_width_mm / 2.0 + inflate,
+                f"track:{_item_id(track)[:8]}",
+            )
+        )
+
+    for via in board_vias(board):
+        via_like = cast(Any, via)
+        if str(getattr(getattr(via, "net", None), "name", "") or "") == net_name:
+            continue
+        try:
+            diameter_mm = nm_to_mm(int(via_like.diameter))
+        except (AttributeError, IndexError, ValueError):
+            diameter_mm = 0.8
+        obstacles.append(
+            CircleObstacle(
+                RoutePoint(*point_xy_mm(via_like.position)),
+                diameter_mm / 2.0 + inflate,
+                f"via:{_item_id(via)[:8]}",
+            )
+        )
+
+    for mapped_pad in _mapped_board_pads(board):
+        pad = mapped_pad.pad
+        pad_like = cast(Any, pad)
+        if str(getattr(getattr(pad, "net", None), "name", "") or "") == net_name:
+            continue
+        obstacles.append(
+            CircleObstacle(
+                RoutePoint(*point_xy_mm(pad_like.position)),
+                _pad_radius_mm(pad, layer) + inflate,
+                f"pad:{mapped_pad.reference or '(unmapped)'}.{pad_like.number}",
+            )
+        )
+
+    for zone in board_zones(board):
+        zone_like = cast(Any, zone)
+        if int(getattr(zone, "type", ZoneType.ZT_UNKNOWN)) != ZoneType.ZT_RULE_AREA:
+            continue
+        layers = set(getattr(zone, "layers", []) or [])
+        if layers and layer not in layers:
+            continue
+        try:
+            box = zone_like.outline.bounding_box()
+            box_x_mm, box_y_mm = point_xy_mm(box.pos)
+            box_width_mm, box_height_mm = point_xy_mm(box.size)
+            min_x = box_x_mm - inflate
+            min_y = box_y_mm - inflate
+            max_x = min_x + box_width_mm + 2 * inflate
+            max_y = min_y + box_height_mm + 2 * inflate
+        except (AttributeError, IndexError, ValueError):
+            warnings.append(f"Rule area '{getattr(zone, 'name', '')}' could not be bounded.")
+            continue
+        obstacles.append(
+            RectObstacle(min_x, min_y, max_x, max_y, f"rule-area:{getattr(zone, 'name', '')}")
+        )
+
+    edge_points: list[RoutePoint] = []
+    for shape in board_shapes(board):
+        if int(getattr(shape, "layer", BoardLayer.BL_UNDEFINED)) != BoardLayer.BL_Edge_Cuts:
+            continue
+        if not hasattr(shape, "start") or not hasattr(shape, "end"):
+            continue
+        shape_start = RoutePoint(*point_xy_mm(shape.start))
+        shape_end = RoutePoint(*point_xy_mm(shape.end))
+        edge_points.extend([shape_start, shape_end])
+
+    bounds = None
+    if edge_points:
+        bounds = (
+            min(point.x_mm for point in edge_points),
+            min(point.y_mm for point in edge_points),
+            max(point.x_mm for point in edge_points),
+            max(point.y_mm for point in edge_points),
+        )
+    else:
+        warnings.append("Board Edge.Cuts bounds were unavailable; route search used local bounds.")
+    if bounds is not None and not (
+        bounds[0] <= start.x_mm <= bounds[2]
+        and bounds[1] <= start.y_mm <= bounds[3]
+        and bounds[0] <= end.x_mm <= bounds[2]
+        and bounds[1] <= end.y_mm <= bounds[3]
+    ):
+        warnings.append("At least one endpoint lies outside the rectangular Edge.Cuts bounds.")
+        bounds = None
+    return tuple(obstacles), bounds, warnings
+
+
+def _plan_payload(plan: _LiveRoutePlan) -> dict[str, object]:
+    return {
+        "plan_id": plan.plan_id,
+        "source": f"{plan.source_ref}.{plan.source_pad}",
+        "target": f"{plan.target_ref}.{plan.target_pad}",
+        "net": plan.net_name,
+        "layer": plan.layer_name.replace("_", "."),
+        "width_mm": plan.width_mm,
+        "clearance_mm": plan.clearance_mm,
+        "grid_mm": plan.grid_mm,
+        "strategy": plan.route.strategy,
+        "length_mm": round(plan.route.length_mm, 3),
+        "explored_nodes": plan.route.explored_nodes,
+        "obstacle_count": plan.obstacle_count,
+        "waypoints": [{"x_mm": point.x_mm, "y_mm": point.y_mm} for point in plan.route.points],
+    }
+
+
+def _build_live_route_plan(
+    *,
+    ref1: str,
+    pad1: str,
+    ref2: str,
+    pad2: str,
+    layer: str,
+    width_mm: float,
+    clearance_mm: float,
+    grid_mm: float,
+    max_iterations: int,
+) -> tuple[_LiveRoutePlan, list[str]]:
+    board = get_board()
+    source, target = _resolve_route_pads(
+        board,
+        ref1=ref1,
+        pad1=pad1,
+        ref2=ref2,
+        pad2=pad2,
+    )
+    source_like = cast(Any, source)
+    target_like = cast(Any, target)
+    source_net = getattr(source, "net", None)
+    target_net = getattr(target, "net", None)
+    source_net_name = str(getattr(source_net, "name", "") or "")
+    target_net_name = str(getattr(target_net, "name", "") or "")
+    if source_net_name != target_net_name:
+        raise ValueError(
+            f"Route endpoints are on different nets: {source_net_name!r} and {target_net_name!r}."
+        )
+    resolved_width, resolved_clearance, net_name = _route_rules(
+        board,
+        source_net,
+        width_mm=width_mm,
+        clearance_mm=clearance_mm,
+    )
+    layer_id = resolve_layer(layer)
+    layer_name = BoardLayer.Name(layer_id)
+    if layer_name.startswith("BL_"):
+        layer_name = layer_name[3:]
+    start = RoutePoint(*point_xy_mm(source_like.position))
+    end = RoutePoint(*point_xy_mm(target_like.position))
+    obstacles, bounds, warnings = _route_obstacles(
+        board,
+        layer=layer_id,
+        net_name=net_name,
+        width_mm=resolved_width,
+        clearance_mm=resolved_clearance,
+        start=start,
+        end=end,
+    )
+    route = plan_route(
+        start=start,
+        end=end,
+        obstacles=obstacles,
+        grid_mm=grid_mm,
+        bounds=bounds,
+        max_iterations=max_iterations,
+    )
+    plan = _LiveRoutePlan(
+        plan_id=str(uuid.uuid4()),
+        board_fingerprint=_board_fingerprint(board),
+        source_ref=_pad_reference(board, source),
+        source_pad=str(source_like.number),
+        target_ref=_pad_reference(board, target),
+        target_pad=str(target_like.number),
+        net_name=net_name,
+        layer_name=layer_name,
+        width_mm=resolved_width,
+        clearance_mm=resolved_clearance,
+        grid_mm=grid_mm,
+        obstacle_count=len(obstacles),
+        route=route,
+    )
+    return plan, warnings
+
+
+def _find_pad(reference: str, pad_number: str) -> _PadLike | None:
+    return cast(_PadLike | None, _find_pad_on_board(get_board(), reference, pad_number))
 
 
 def _list_board_net_names() -> set[str]:
@@ -255,6 +627,228 @@ async def _report_progress(
 
 def register(mcp: FastMCP) -> None:
     """Register routing tools."""
+
+    @mcp.tool()
+    @requires_kicad_running
+    def pcb_get_routing_context(
+        ref1: str = "",
+        pad1: str = "",
+        ref2: str = "",
+        pad2: str = "",
+        layer: str = "F_Cu",
+        width_mm: float = 0.0,
+        clearance_mm: float = 0.0,
+        grid_mm: float = 0.25,
+        max_iterations: int = 50_000,
+    ) -> str:
+        """Inspect and plan one pad-to-pad route without modifying the board.
+
+        Provide both pad endpoints, or select exactly two pads in PCB Editor. Width
+        and clearance default to the live net class. The returned path is only a
+        preview and carries a board fingerprint so stale plans cannot be applied.
+        """
+        try:
+            plan, warnings = _build_live_route_plan(
+                ref1=ref1,
+                pad1=pad1,
+                ref2=ref2,
+                pad2=pad2,
+                layer=layer,
+                width_mm=width_mm,
+                clearance_mm=clearance_mm,
+                grid_mm=grid_mm,
+                max_iterations=max_iterations,
+            )
+        except (RouteNotFoundError, ValueError) as exc:
+            return ToolResult.failure("pcb_get_routing_context", str(exc)).to_mcp_text()
+        payload = _plan_payload(plan)
+        payload["warnings"] = warnings
+        payload["preview_only"] = True
+        return json.dumps(payload, indent=2)
+
+    @mcp.tool()
+    @requires_kicad_running
+    def pcb_plan_route(
+        ref1: str = "",
+        pad1: str = "",
+        ref2: str = "",
+        pad2: str = "",
+        layer: str = "F_Cu",
+        width_mm: float = 0.0,
+        clearance_mm: float = 0.0,
+        grid_mm: float = 0.25,
+        max_iterations: int = 50_000,
+    ) -> ToolResult:
+        """Create a clearance-aware route plan without changing live PCB state."""
+        try:
+            plan, warnings = _build_live_route_plan(
+                ref1=ref1,
+                pad1=pad1,
+                ref2=ref2,
+                pad2=pad2,
+                layer=layer,
+                width_mm=width_mm,
+                clearance_mm=clearance_mm,
+                grid_mm=grid_mm,
+                max_iterations=max_iterations,
+            )
+        except (RouteNotFoundError, ValueError) as exc:
+            return ToolResult.failure("pcb_plan_route", str(exc))
+        _ROUTE_PLANS[plan.plan_id] = plan
+        return ToolResult.dry_run_result(
+            "pcb_plan_route",
+            (
+                f"Planned {plan.net_name} from {plan.source_ref}.{plan.source_pad} "
+                f"to {plan.target_ref}.{plan.target_pad} on "
+                f"{plan.layer_name.replace('_', '.')} using {len(plan.route.points) - 1} segments."
+            ),
+            warnings=warnings,
+            extra={"route_plan": _plan_payload(plan)},
+        )
+
+    @mcp.tool()
+    @requires_kicad_running
+    def pcb_apply_route_plan(plan_id: str) -> ToolResult:
+        """Apply a previewed route atomically as one KiCad undo step.
+
+        The call refuses stale or already-applied plans. Every created track UUID is
+        returned as a receipt so pcb_revert_route_plan can remove exactly this route.
+        """
+        plan = _ROUTE_PLANS.get(plan_id)
+        if plan is None:
+            if plan_id in _ROUTE_RECEIPTS:
+                return ToolResult.failure(
+                    "pcb_apply_route_plan", "That route plan is already applied."
+                )
+            return ToolResult.failure("pcb_apply_route_plan", "Unknown or expired route plan ID.")
+
+        try:
+            board = get_board()
+            current_fingerprint = _board_fingerprint(board)
+            if current_fingerprint != plan.board_fingerprint:
+                return ToolResult.failure(
+                    "pcb_apply_route_plan",
+                    "The live board changed after this route was planned. "
+                    "Plan it again before applying.",
+                )
+            source = _find_pad_on_board(board, plan.source_ref, plan.source_pad)
+            target = _find_pad_on_board(board, plan.target_ref, plan.target_pad)
+            if source is None or target is None:
+                return ToolResult.failure(
+                    "pcb_apply_route_plan", "One or both route endpoint pads no longer exist."
+                )
+            source_net = getattr(source, "net", None)
+            if str(getattr(source_net, "name", "") or "") != plan.net_name:
+                return ToolResult.failure(
+                    "pcb_apply_route_plan", "The source pad net changed after route planning."
+                )
+
+            tracks: list[Track] = []
+            layer_id = resolve_layer(plan.layer_name)
+            for start, end in zip(plan.route.points, plan.route.points[1:], strict=False):
+                track = Track()
+                track.start = Vector2.from_xy_mm(start.x_mm, start.y_mm)
+                track.end = Vector2.from_xy_mm(end.x_mm, end.y_mm)
+                track.layer = layer_id
+                track.width = mm_to_nm(plan.width_mm)
+                track.net = cast(Net, source_net)
+                tracks.append(track)
+            if not tracks:
+                return ToolResult.failure("pcb_apply_route_plan", "The route plan has no segments.")
+
+            def _apply() -> list[object]:
+                commit = board.begin_commit()
+                try:
+                    created = cast(list[object], list(board.create_items(tracks)))
+                    board.push_commit(
+                        commit,
+                        f"Route {plan.net_name}: {plan.source_ref}.{plan.source_pad} to "
+                        f"{plan.target_ref}.{plan.target_pad}",
+                    )
+                    return created
+                except Exception:
+                    board.drop_commit(commit)
+                    raise
+
+            created = _run_queued_ipc_mutation("pcb_apply_route_plan", _apply)
+            created_ids = tuple(item_id for item in created if (item_id := _item_id(item)))
+            post_fingerprint = _board_fingerprint(board)
+        except Exception as exc:
+            return ToolResult.failure("pcb_apply_route_plan", f"Route application failed: {exc}")
+
+        _ROUTE_PLANS.pop(plan_id, None)
+        _ROUTE_RECEIPTS[plan_id] = _RouteReceipt(plan, created_ids, post_fingerprint)
+        return ToolResult.success(
+            "pcb_apply_route_plan",
+            changed=True,
+            rollback_token=plan_id,
+            state_delta=StateDelta(
+                pre_fingerprint=plan.board_fingerprint,
+                post_fingerprint=post_fingerprint,
+                summary=(
+                    f"Added {len(created_ids)} track segments for {plan.net_name} as one KiCad "
+                    "undo step."
+                ),
+            ),
+            extra={
+                "route_plan": _plan_payload(plan),
+                "created_item_ids": list(created_ids),
+                "verification": {
+                    "geometry": "planner clearance checks passed",
+                    "connectivity": "run DRC or get_unconnected_nets for board-level confirmation",
+                },
+            },
+        )
+
+    @mcp.tool()
+    @requires_kicad_running
+    def pcb_revert_route_plan(plan_id: str) -> ToolResult:
+        """Remove exactly the track items created by a prior route-plan application."""
+        receipt = _ROUTE_RECEIPTS.get(plan_id)
+        if receipt is None:
+            return ToolResult.failure(
+                "pcb_revert_route_plan", "Unknown or already-reverted route ID."
+            )
+        if not receipt.created_item_ids:
+            return ToolResult.failure(
+                "pcb_revert_route_plan", "The route receipt contains no created item IDs."
+            )
+        try:
+            from kipy.proto.common.types import KIID
+
+            board = get_board()
+            before = _board_fingerprint(board)
+            ids = []
+            for item_id in receipt.created_item_ids:
+                kiid = KIID()
+                kiid.value = item_id
+                ids.append(kiid)
+
+            def _revert() -> None:
+                commit = board.begin_commit()
+                try:
+                    board.remove_items_by_id(ids)
+                    board.push_commit(commit, f"Revert agent route {receipt.plan.net_name}")
+                except Exception:
+                    board.drop_commit(commit)
+                    raise
+
+            _run_queued_ipc_mutation("pcb_revert_route_plan", _revert)
+            after = _board_fingerprint(board)
+        except Exception as exc:
+            return ToolResult.failure("pcb_revert_route_plan", f"Route revert failed: {exc}")
+
+        _ROUTE_RECEIPTS.pop(plan_id, None)
+        return ToolResult.success(
+            "pcb_revert_route_plan",
+            changed=True,
+            state_delta=StateDelta(
+                pre_fingerprint=before,
+                post_fingerprint=after,
+                summary=f"Removed {len(receipt.created_item_ids)} track segments.",
+            ),
+            extra={"removed_item_ids": list(receipt.created_item_ids)},
+        )
 
     @mcp.tool()
     @requires_kicad_running

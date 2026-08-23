@@ -10,6 +10,7 @@ from kicad_mcp.tools.router import (
     TOOL_CATEGORIES,
     available_profiles,
     categories_for_profile,
+    tools_for_profile,
 )
 from tests.conftest import call_tool_text
 
@@ -37,6 +38,7 @@ def test_available_profiles_include_v2_surface() -> None:
         "agent_full",
         "pcb",
         "schematic",
+        "heather_live",
     }
 
     assert expected.issubset(set(available_profiles()))
@@ -52,6 +54,13 @@ def test_available_profiles_include_v2_surface() -> None:
     assert "simulation" in PROFILE_CATEGORIES["high_speed"]
     assert "version_control" in PROFILE_CATEGORIES["high_speed"]
     assert categories_for_profile("agent_full") == PROFILE_CATEGORIES["agent_full"]
+    assert {
+        "pcb_get_routing_context",
+        "pcb_plan_route",
+        "pcb_apply_route_plan",
+        "pcb_revert_route_plan",
+    }.issubset(set(tools_for_profile("heather_live")))
+    assert "export_manufacturing_package" not in tools_for_profile("heather_live")
     assert categories_for_profile("unknown-profile") == PROFILE_CATEGORIES["default"]
 
 

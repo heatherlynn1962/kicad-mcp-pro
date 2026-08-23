@@ -24,6 +24,7 @@ PROFILE_MODES: dict[str, str] = {
     "default": "readonly",
     "review": "readonly",
     "build": "write",
+    "heather_live": "write",
     "release": "manufacturing",
     "expert": "experimental",
 }
